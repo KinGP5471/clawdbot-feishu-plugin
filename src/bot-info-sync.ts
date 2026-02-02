@@ -183,8 +183,8 @@ export async function syncBotInfo(account: ResolvedFeishuAccount): Promise<void>
 
   // 4. 更新 workspace 文件（仅对 default 账号更新）
   if (account.accountId === "default") {
-    // default 账号对应 main agent，workspace 是 /root/clawd
-    const workspace = account.workspace || "/root/clawd";
+    // default 账号对应 main agent，workspace 为 process.cwd()
+    const workspace = account.workspace || process.cwd();
     await updateIdentityFile(workspace, botInfo);
     await updateSoulFile(workspace, botInfo.app_name);
     

@@ -303,7 +303,7 @@ export async function downloadMessageResource(
     const buffer = Buffer.concat(chunks);
 
     // 保存到对应 account workspace 下的 downloads 目录
-    const baseDir = account.workspace || "/root/clawd";
+    const baseDir = account.workspace || process.cwd();
     const downloadDir = join(baseDir, "downloads");
     const { mkdir } = await import("fs/promises");
     await mkdir(downloadDir, { recursive: true });
@@ -347,7 +347,7 @@ export async function downloadImage(
     }
     const buffer = Buffer.concat(chunks);
 
-    const baseDir = account.workspace || "/root/clawd";
+    const baseDir = account.workspace || process.cwd();
     const downloadDir = join(baseDir, "downloads");
     const { mkdir } = await import("fs/promises");
     await mkdir(downloadDir, { recursive: true });
