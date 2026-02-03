@@ -623,7 +623,7 @@ export async function startGateway(options: GatewayOptions): Promise<lark.WSClie
             // 表示 bot 已收到并开始处理，回复后自动移除
             if (account.autoAcknowledge !== false) {
               try {
-                const ackResult = await addReaction(account, messageId, "EYES");
+                const ackResult = await addReaction(account, messageId, "Salute");
                 if (ackResult.ok && ackResult.reactionId) {
                   pendingAcknowledgements.set(messageId, {
                     accountId: cacheKey,
