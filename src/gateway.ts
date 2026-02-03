@@ -8,7 +8,7 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import * as fs from "fs";
 import * as path from "path";
 import type { ResolvedFeishuAccount, FeishuMessage } from "./types.js";
-import { sendTextMessage, transcribeAudio, downloadMessageResource, downloadImage, getBotInfo, getQuotedMessage, getMergeForwardMessages } from "./client.js";
+import { sendTextMessage, transcribeAudio, downloadMessageResource, downloadImage, getBotInfo, getQuotedMessage, getMergeForwardMessages, addReaction, removeReaction } from "./client.js";
 
 // WebSocket 客户端缓存
 const wsClientCache = new Map<string, lark.WSClient>();
@@ -25,6 +25,24 @@ const MESSAGE_EXPIRE_TTL_MS = 30 * 60 * 1000; // 30分钟
 // 会话类型缓存：chatId -> "p2p" | "group"
 // 从 im.message.receive_v1 事件中学习，供卡片回调使用
 const chatTypeCache = new Map<string, "p2p" | "group">();
+
+// 自动确认回执缓存：messageId -> reactionId
+// 收到消息时加 👀 reaction，回复后移除
+const pendingAcknowledgements = new Map<string, { accountId: string; reactionId: string }>();
+
+/**
+ * 获取待确认的回执信息（供 channel.ts 回复后移除 reaction 使用）
+ */
+export function getPendingAcknowledgement(messageId: string): { accountId: string; reactionId: string } | undefined {
+  return pendingAcknowledgements.get(messageId);
+}
+
+/**
+ * 移除待确认的回执（回复后调用）
+ */
+export function removePendingAcknowledgement(messageId: string): void {
+  pendingAcknowledgements.delete(messageId);
+}
 
 /**
  * 清理过期的去重缓存
@@ -598,6 +616,25 @@ export async function startGateway(options: GatewayOptions): Promise<lark.WSClie
                 }
               } catch (err) {
                 logger?.error(`Failed to fetch quoted message ${parentId}: ${err}`);
+              }
+            }
+
+            // 自动确认回执：收到消息后立即加 👀 reaction
+            // 表示 bot 已收到并开始处理，回复后自动移除
+            if (account.autoAcknowledge !== false) {
+              try {
+                const ackResult = await addReaction(account, messageId, "EYES");
+                if (ackResult.ok && ackResult.reactionId) {
+                  pendingAcknowledgements.set(messageId, {
+                    accountId: cacheKey,
+                    reactionId: ackResult.reactionId,
+                  });
+                  // 5分钟后自动清理，防止内存泄漏
+                  setTimeout(() => pendingAcknowledgements.delete(messageId), 5 * 60 * 1000);
+                }
+              } catch (ackErr) {
+                // 不影响主流程
+                logger?.error(`Auto-acknowledge failed for ${messageId}: ${ackErr}`);
               }
             }
 

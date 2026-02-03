@@ -9,6 +9,8 @@ export interface FeishuAccountConfig {
   appSecret: string;
   /** 可选的 workspace 路径 */
   workspace?: string;
+  /** 自动确认回执：收到消息时加 👀 reaction，回复后移除（默认 true） */
+  autoAcknowledge?: boolean;
 }
 
 export interface FeishuChannelConfig {
@@ -29,6 +31,8 @@ export interface ResolvedFeishuAccount {
   appSecret: string;
   workspace?: string;
   enabled?: boolean;
+  /** 自动确认回执（默认 true） */
+  autoAcknowledge?: boolean;
 }
 
 export interface FeishuMessage {

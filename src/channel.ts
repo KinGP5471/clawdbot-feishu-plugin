@@ -66,6 +66,7 @@ function resolveFeishuAccount(
       appId: acc.appId,
       appSecret: acc.appSecret,
       workspace: acc.workspace,
+      autoAcknowledge: acc.autoAcknowledge,
     };
   }
 
@@ -483,6 +484,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               appId: { type: "string", description: "飞书应用 App ID" },
               appSecret: { type: "string", description: "飞书应用 App Secret" },
               workspace: { type: "string", description: "Agent workspace 路径（可选，用于绑定 Agent）" },
+              autoAcknowledge: { type: "boolean", description: "收到消息时自动加 👀 回执，回复后移除（默认 true）" },
             },
             required: ["appId", "appSecret"],
           },
@@ -499,6 +501,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       "accounts.*.appId": { label: "App ID" },
       "accounts.*.appSecret": { label: "App Secret", sensitive: true },
       "accounts.*.workspace": { label: "Workspace 路径", advanced: true },
+      "accounts.*.autoAcknowledge": { label: "自动确认回执", help: "收到消息时加 👀，回复后自动移除（默认开启）" },
     },
   },
 
@@ -800,6 +803,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
 
           // 确保退出前刷新所有缓冲内容
           await flushBlockBuffer();
+
+          // 回复完成后，移除自动确认回执的 👀 reaction
+          try {
+            const { getPendingAcknowledgement, removePendingAcknowledgement } = await import("./gateway.js");
+            const ack = getPendingAcknowledgement(message.messageId);
+            if (ack) {
+              await removeReaction(account, message.messageId, ack.reactionId);
+              removePendingAcknowledgement(message.messageId);
+            }
+          } catch (ackErr) {
+            // 不影响主流程
+            console.error(`[feishu:${account.accountId}] Remove ack reaction failed: ${ackErr}`);
+          }
         },
         logger: {
           info: (msg) => console.log(`[feishu:${account.accountId}] ${msg}`),
