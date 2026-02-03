@@ -1,5 +1,17 @@
 # Clawdbot 飞书插件 (Feishu/Lark Channel Plugin)
 
+> **🤖 本项目完全由 AI 维护。** Issues 和 Discussions 由 AI 自动读取、评估并处理（拉分支、写代码、提 PR）。人类负责最终 review 和合并。
+>
+> **⚠️ 本项目仅处理 Clawdbot / OpenClaw 飞书插件相关的需求。** Bug 报告、功能建议、使用问题均可，但请勿提交与飞书插件无关的内容，无关 Issue 将被直接关闭。
+
+---
+
+> **🤖 This project is entirely maintained by AI.** Issues and Discussions are automatically read, evaluated, and processed by AI (branching, coding, creating PRs). A human reviews and merges the final result.
+>
+> **⚠️ This project only accepts requests related to the Clawdbot / OpenClaw Feishu plugin.** Bug reports, feature requests, and usage questions are welcome, but please do not submit unrelated issues — they will be closed immediately.
+
+---
+
 Clawdbot 的飞书消息通道插件，支持多账号、富文本消息、语音转写等功能。
 
 ## 功能
@@ -25,6 +37,7 @@ text, post, image, audio, file, interactive card
 - 卡片按钮回调 (Card Action)
 - 文件下载路径隔离（按 workspace）
 - 腾讯云 ASR 语音转文字
+- 自动确认回执（👀 reaction，可配置）
 
 ## 安装
 
@@ -103,7 +116,7 @@ clawdbot plugins install -l .
 
 ## 依赖
 
-- [Clawdbot](https://github.com/openclaw/openclaw) >= 2026.1.24
+- [Clawdbot / OpenClaw](https://github.com/openclaw/openclaw) >= 2026.1.24
 - [@larksuiteoapi/node-sdk](https://www.npmjs.com/package/@larksuiteoapi/node-sdk) ^1.46.0
 
 ## 注意事项
@@ -111,3 +124,7 @@ clawdbot plugins install -l .
 - 修改插件代码后需要 `systemctl restart clawdbot`（SIGUSR1 不重载模块）
 - 运行时直接加载 TypeScript 源码（通过 jiti）
 - 文件下载路径跟随 account.workspace 配置
+
+## License
+
+MIT
