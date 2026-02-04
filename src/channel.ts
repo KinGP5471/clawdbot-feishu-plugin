@@ -8,8 +8,8 @@ import type {
   ChannelOnboardingAdapter,
 } from "clawdbot/plugin-sdk";
 import type { ResolvedFeishuAccount, FeishuChannelConfig } from "./types.js";
-import { sendTextMessage, sendMedia, sendPostMessage, sendInteractiveMessage, markdownToFeishuPost, addReaction, removeReaction, deleteMessage, updateMessage, replyMessage } from "./client.js";
-import { startGateway } from "./gateway.js";
+import { sendTextMessage, sendMedia, sendPostMessage, sendInteractiveMessage, markdownToFeishuPost, addReaction, removeReaction, deleteMessage, updateMessage, replyMessage, getApiDomain } from "./client.js";
+import { startGateway, startWebhookGateway } from "./gateway.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { MsgContext } from "./msg-context.js";
 import { syncBotInfo } from "./bot-info-sync.js";
@@ -67,6 +67,11 @@ function resolveFeishuAccount(
       appSecret: acc.appSecret,
       workspace: acc.workspace,
       autoAcknowledge: acc.autoAcknowledge,
+      domain: acc.domain || feishuCfg.domain,
+      mode: acc.mode || feishuCfg.mode,
+      webhookPath: acc.webhookPath || feishuCfg.webhookPath,
+      encryptKey: acc.encryptKey || feishuCfg.encryptKey,
+      verificationToken: acc.verificationToken || feishuCfg.verificationToken,
     };
   }
 
@@ -76,6 +81,11 @@ function resolveFeishuAccount(
       accountId: DEFAULT_ACCOUNT_ID,
       appId: feishuCfg.appId,
       appSecret: feishuCfg.appSecret,
+      domain: feishuCfg.domain,
+      mode: feishuCfg.mode,
+      webhookPath: feishuCfg.webhookPath,
+      encryptKey: feishuCfg.encryptKey,
+      verificationToken: feishuCfg.verificationToken,
     };
   }
 
@@ -524,8 +534,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs || 10000);
+        const apiDomain = getApiDomain(account.domain);
         const resp = await fetch(
-          "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+          `${apiDomain}/open-apis/auth/v3/tenant_access_token/internal`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -654,7 +665,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       // 同步机器人信息到 workspace
       await syncBotInfo(account);
 
-      await startGateway({
+      // 根据配置选择 WebSocket 或 HTTP Webhook 模式
+      // Lark 国际版必须用 webhook（不支持 WebSocket 长连接）
+      const useWebhook = account.mode === "webhook" || (account.domain === "lark" && account.mode !== "ws");
+      const gatewayStarter = useWebhook ? startWebhookGateway : startGateway;
+
+      if (useWebhook) {
+        console.log(`[feishu:${account.accountId}] Starting in WEBHOOK mode (path: ${account.webhookPath || "/feishu/webhook"})`);
+      } else {
+        console.log(`[feishu:${account.accountId}] Starting in WebSocket mode`);
+      }
+
+      await gatewayStarter({
         account,
         abortSignal: ctx.abortSignal,
         onMessage: async (message) => {

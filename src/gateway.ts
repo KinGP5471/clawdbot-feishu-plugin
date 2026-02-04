@@ -114,48 +114,21 @@ const botOpenIdCache = new Map<string, string>();
 /**
  * 启动飞书长连接网关
  */
-export async function startGateway(options: GatewayOptions): Promise<lark.WSClient> {
-  const { account, onMessage, abortSignal, logger } = options;
+
+/**
+ * 创建飞书事件分发器（WS 和 Webhook 模式共用）
+ */
+function createFeishuEventDispatcher(
+  options: GatewayOptions,
+  dispatcherParams?: { encryptKey?: string; verificationToken?: string },
+): lark.EventDispatcher {
+  const { account, onMessage, logger } = options;
   const cacheKey = account.accountId;
 
-  // 如果已存在，先停止
-  const existing = wsClientCache.get(cacheKey);
-  if (existing) {
-    stopGateway(cacheKey);
-  }
-
-  // 先获取机器人信息（用于后续判断 mentions）
-  try {
-    const info = await getBotInfo(account);
-    if (info && info.open_id) {
-      botOpenIdCache.set(cacheKey, info.open_id);
-      logger?.info(`Bot info: open_id=${info.open_id}, name=${info.app_name}`);
-    } else {
-      logger?.error(`Failed to get bot info: API returned null`);
-    }
-  } catch (err) {
-    logger?.error(`Failed to get bot info: ${err}`);
-  }
-
-  const wsClient = new lark.WSClient({
-    appId: account.appId,
-    appSecret: account.appSecret,
-    loggerLevel: lark.LoggerLevel.error,
-  });
-
-  // 监听 abortSignal，支持框架优雅停止
-  if (abortSignal) {
-    abortSignal.addEventListener("abort", () => {
-      logger?.info("received abort signal, stopping gateway");
-      stopGateway(cacheKey);
-    }, { once: true });
-  }
-
-  // 卡片按钮回调 (card.action.trigger)
-  // 通过长连接模式接收，在 EventDispatcher 中注册处理器
-
-  wsClient.start({
-    eventDispatcher: new lark.EventDispatcher({}).register({
+  return new lark.EventDispatcher({
+    encryptKey: dispatcherParams?.encryptKey || "",
+    verificationToken: dispatcherParams?.verificationToken || "",
+  }).register({
       "im.message.receive_v1": async (data) => {
         const message = data.message;
         if (!message) return {};
@@ -724,8 +697,49 @@ export async function startGateway(options: GatewayOptions): Promise<lark.WSClie
         // 如果需要更新卡片，可以返回新的卡片 JSON
         return {};
       },
-    }),
   });
+}
+
+export async function startGateway(options: GatewayOptions): Promise<lark.WSClient> {
+  const { account, onMessage, abortSignal, logger } = options;
+  const cacheKey = account.accountId;
+
+  // 如果已存在，先停止
+  const existing = wsClientCache.get(cacheKey);
+  if (existing) {
+    stopGateway(cacheKey);
+  }
+
+  // 先获取机器人信息（用于后续判断 mentions）
+  try {
+    const info = await getBotInfo(account);
+    if (info && info.open_id) {
+      botOpenIdCache.set(cacheKey, info.open_id);
+      logger?.info(`Bot info: open_id=${info.open_id}, name=${info.app_name}`);
+    } else {
+      logger?.error(`Failed to get bot info: API returned null`);
+    }
+  } catch (err) {
+    logger?.error(`Failed to get bot info: ${err}`);
+  }
+
+  const wsClient = new lark.WSClient({
+    appId: account.appId,
+    appSecret: account.appSecret,
+    loggerLevel: lark.LoggerLevel.error,
+  });
+
+  // 监听 abortSignal，支持框架优雅停止
+  if (abortSignal) {
+    abortSignal.addEventListener("abort", () => {
+      logger?.info("received abort signal, stopping gateway");
+      stopGateway(cacheKey);
+    }, { once: true });
+  }
+
+  // 创建事件分发器
+  const dispatcher = createFeishuEventDispatcher(options);
+  wsClient.start({ eventDispatcher: dispatcher });
 
   // 登录成功日志
   logger?.info(`logged in to feishu as ${account.appId}`);
@@ -803,4 +817,177 @@ export function stopGateway(accountId: string): void {
     }
     wsClientCache.delete(accountId);
   }
+}
+
+// ── Webhook 模式 ──────────────────────────────────────
+
+// Webhook 清理函数缓存
+const webhookCleanupCache = new Map<string, () => void>();
+
+/**
+ * 读取 HTTP 请求体
+ */
+function readHttpBody(req: any): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * 启动飞书 HTTP 回调网关（Webhook 模式）
+ * 用于 Lark 国际版（不支持 WebSocket）或国内飞书的 HTTP 回调模式
+ */
+export async function startWebhookGateway(options: GatewayOptions): Promise<() => void> {
+  const { account, onMessage, abortSignal, logger } = options;
+  const cacheKey = account.accountId;
+
+  // 清理旧的 webhook
+  const existingCleanup = webhookCleanupCache.get(cacheKey);
+  if (existingCleanup) {
+    existingCleanup();
+    webhookCleanupCache.delete(cacheKey);
+  }
+
+  // 获取机器人信息（用于 mentions 判断）
+  try {
+    const info = await getBotInfo(account);
+    if (info && info.open_id) {
+      botOpenIdCache.set(cacheKey, info.open_id);
+      logger?.info(`[webhook] Bot info: open_id=${info.open_id}, name=${info.app_name}`);
+    } else {
+      logger?.error(`[webhook] Failed to get bot info: API returned null`);
+    }
+  } catch (err) {
+    logger?.error(`[webhook] Failed to get bot info: ${err}`);
+  }
+
+  // 创建事件分发器（传入 encryptKey 和 verificationToken 用于 HTTP 请求验证）
+  const dispatcher = createFeishuEventDispatcher(options, {
+    encryptKey: account.encryptKey || "",
+    verificationToken: account.verificationToken || "",
+  });
+
+  const webhookPath = account.webhookPath || "/feishu/webhook";
+  logger?.info(`[webhook] Registering HTTP route: ${webhookPath}`);
+
+  // 动态导入 plugin SDK 的 HTTP 路由注册
+  const { registerPluginHttpRoute } = await import("clawdbot/plugin-sdk");
+
+  const unregister = registerPluginHttpRoute({
+    path: webhookPath,
+    pluginId: "feishu",
+    accountId: account.accountId,
+    log: (msg: string) => logger?.info(msg),
+    handler: async (req: any, res: any) => {
+      // 只接受 POST
+      if (req.method === "GET") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain");
+        res.end("Feishu Webhook OK");
+        return;
+      }
+      if (req.method !== "POST") {
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, POST");
+        res.end("Method Not Allowed");
+        return;
+      }
+
+      let rawBody: string;
+      try {
+        rawBody = await readHttpBody(req);
+      } catch (err) {
+        logger?.error(`[webhook] Failed to read request body: ${err}`);
+        res.statusCode = 400;
+        res.end("Bad Request");
+        return;
+      }
+
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        logger?.error(`[webhook] Invalid JSON body`);
+        res.statusCode = 400;
+        res.end("Invalid JSON");
+        return;
+      }
+
+      logger?.info(`[webhook] Received event: type=${data.type || data.header?.event_type || "unknown"}`);
+
+      // ── URL Verification Challenge ──
+      // 飞书/Lark 配置回调地址时发送的验证请求
+      if (data.type === "url_verification") {
+        logger?.info(`[webhook] URL verification challenge received`);
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ challenge: data.challenge }));
+        return;
+      }
+
+      // ── 加密消息的 Challenge 处理 ──
+      // 如果启用了 Encrypt Key，飞书会用 AES 加密事件数据
+      // EventDispatcher.invoke() 会自动解密，但 challenge 需要特殊处理
+      if (data.encrypt && account.encryptKey) {
+        try {
+          // 尝试让 SDK 解密并处理
+          // SDK 的 RequestHandle.parse() 会自动解密
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+
+          // SDK invoke 会处理解密、验证、分发
+          const result = await dispatcher.invoke(data);
+
+          // 如果是 challenge，result 可能包含 challenge 响应
+          if (result && typeof result === "object" && (result as any).challenge) {
+            res.end(JSON.stringify(result));
+          } else {
+            res.end("{}");
+          }
+          return;
+        } catch (err) {
+          logger?.error(`[webhook] Failed to process encrypted event: ${err}`);
+          res.statusCode = 200;
+          res.end("{}");
+          return;
+        }
+      }
+
+      // ── 普通事件处理 ──
+      // 立即返回 200，避免飞书超时重推（3秒超时）
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end("{}");
+
+      // 异步处理事件
+      try {
+        // 构造带 headers 的数据（SDK 需要 headers 做验证）
+        const eventData = Object.assign(
+          Object.create({ headers: req.headers }),
+          data,
+        );
+        await dispatcher.invoke(eventData);
+      } catch (err) {
+        logger?.error(`[webhook] Event dispatch error: ${err}`);
+      }
+    },
+  });
+
+  // 记录清理函数
+  webhookCleanupCache.set(cacheKey, unregister);
+
+  // 监听 abortSignal
+  if (abortSignal) {
+    abortSignal.addEventListener("abort", () => {
+      logger?.info("[webhook] Received abort signal, unregistering HTTP route");
+      unregister();
+      webhookCleanupCache.delete(cacheKey);
+    }, { once: true });
+  }
+
+  logger?.info(`[webhook] HTTP webhook gateway started on ${webhookPath}`);
+  return unregister;
 }

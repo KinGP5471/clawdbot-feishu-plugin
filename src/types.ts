@@ -11,6 +11,16 @@ export interface FeishuAccountConfig {
   workspace?: string;
   /** 自动确认回执：收到消息时加 👀 reaction，回复后移除（默认 true） */
   autoAcknowledge?: boolean;
+  /** API 域名: feishu(国内,默认) | lark(国际) */
+  domain?: "feishu" | "lark";
+  /** 连接模式: ws(长连接,默认) | webhook(HTTP回调) — Lark国际版必须用webhook */
+  mode?: "ws" | "webhook";
+  /** Webhook 路径（默认 /feishu/webhook），多账号时每个账号需不同路径 */
+  webhookPath?: string;
+  /** 事件加密密钥 (Encrypt Key)，从飞书开放平台获取 */
+  encryptKey?: string;
+  /** 验证令牌 (Verification Token)，从飞书开放平台获取 */
+  verificationToken?: string;
 }
 
 export interface FeishuChannelConfig {
@@ -23,6 +33,16 @@ export interface FeishuChannelConfig {
   accounts?: {
     [accountId: string]: FeishuAccountConfig;
   };
+  /** 全局 API 域名（单账号模式用）: feishu | lark */
+  domain?: "feishu" | "lark";
+  /** 全局连接模式（单账号模式用）: ws | webhook */
+  mode?: "ws" | "webhook";
+  /** 全局 Webhook 路径（单账号模式用） */
+  webhookPath?: string;
+  /** 全局 Encrypt Key（单账号模式用） */
+  encryptKey?: string;
+  /** 全局 Verification Token（单账号模式用） */
+  verificationToken?: string;
 }
 
 export interface ResolvedFeishuAccount {
@@ -33,6 +53,16 @@ export interface ResolvedFeishuAccount {
   enabled?: boolean;
   /** 自动确认回执（默认 true） */
   autoAcknowledge?: boolean;
+  /** API 域名 */
+  domain?: "feishu" | "lark";
+  /** 连接模式 */
+  mode?: "ws" | "webhook";
+  /** Webhook 路径 */
+  webhookPath?: string;
+  /** Encrypt Key */
+  encryptKey?: string;
+  /** Verification Token */
+  verificationToken?: string;
 }
 
 export interface FeishuMessage {

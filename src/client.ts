@@ -22,18 +22,31 @@ const clientCache = new Map<string, lark.Client>();
 const botInfoCache = new Map<string, { open_id: string; app_name: string }>();
 
 /**
+ * 根据 domain 配置获取 API 域名
+ */
+export function getApiDomain(domain?: "feishu" | "lark"): string {
+  return domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+}
+
+/**
  * 获取或创建飞书客户端
  */
 export function getFeishuClient(account: ResolvedFeishuAccount): lark.Client {
-  // 只使用 appId 作为缓存 key，避免敏感信息泄露
-  const cacheKey = account.appId;
+  // 使用 appId + domain 作为缓存 key
+  const domainKey = account.domain === "lark" ? "lark" : "feishu";
+  const cacheKey = `${account.appId}:${domainKey}`;
   
   let client = clientCache.get(cacheKey);
   if (!client) {
-    client = new lark.Client({
+    const clientOpts: any = {
       appId: account.appId,
       appSecret: account.appSecret,
-    });
+    };
+    // Lark 国际版使用不同的 API 域名
+    if (account.domain === "lark") {
+      clientOpts.domain = (lark as any).Domain?.Lark || "https://open.larksuite.com";
+    }
+    client = new lark.Client(clientOpts);
     clientCache.set(cacheKey, client);
   }
   
@@ -601,7 +614,7 @@ export async function sendInteractiveMessage(
   account: ResolvedFeishuAccount,
   chatId: string,
   card: Record<string, any>,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   const client = getFeishuClient(account);
 
   try {
@@ -615,7 +628,7 @@ export async function sendInteractiveMessage(
     });
 
     if (result.code === 0) {
-      return { ok: true };
+      return { ok: true, messageId: (result.data as any)?.message_id };
     }
     return { ok: false, error: result.msg };
   } catch (error) {
