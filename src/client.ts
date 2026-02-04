@@ -83,7 +83,8 @@ export async function sendTextMessage(
   account: ResolvedFeishuAccount,
   chatId: string,
   text: string
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  console.log(`[feishu:client] sendTextMessage → accountId=${account.accountId}, appId=${account.appId?.slice(0,8)}..., chatId=${chatId}, text=${text?.substring(0,50)}...`);
   const client = getFeishuClient(account);
   
   try {
@@ -99,7 +100,7 @@ export async function sendTextMessage(
     });
     
     if (result.code === 0) {
-      return { ok: true };
+      return { ok: true, messageId: (result.data as any)?.message_id };
     } else {
       return { ok: false, error: result.msg };
     }
@@ -454,6 +455,7 @@ async function convertToOpus(inputPath: string): Promise<{ path: string; duratio
     outputPath,
   ], { timeout: 30000 });
 
+  console.log(`[feishu] convertToOpus: input=${inputPath}, output=${outputPath}, duration=${duration}ms`);
   return { path: outputPath, duration };
 }
 
@@ -508,14 +510,14 @@ export async function uploadFile(
       data: {
         file_type: fileType,
         file_name: fileName,
-        ...(duration !== undefined ? { duration: Math.round(duration / 1000) } : {}),
+        ...(duration !== undefined ? { duration: Math.round(duration) } : {}),
         file: fileStream,
       },
     });
 
     const fileKey = result?.file_key;
     if (fileKey) {
-      console.log(`[feishu] File uploaded: ${fileKey} (type=${fileType})`);
+      console.log(`[feishu] File uploaded: ${fileKey} (type=${fileType}, duration=${duration}ms → ${duration !== undefined ? Math.round(duration / 1000) : 'N/A'}s)`);
       return fileKey;
     }
     console.error(`[feishu] File upload failed: no file_key returned`);
@@ -562,16 +564,22 @@ export async function sendAudioMessage(
   account: ResolvedFeishuAccount,
   chatId: string,
   fileKey: string,
+  duration?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getFeishuClient(account);
 
   try {
+    const content: any = { file_key: fileKey };
+    if (duration && duration > 0) {
+      content.duration = String(duration); // 毫秒，飞书要求字符串
+    }
+    console.log(`[feishu] sendAudioMessage: fileKey=${fileKey}, duration=${duration}ms, content=${JSON.stringify(content)}`);
     const result = await client.im.v1.message.create({
       params: { receive_id_type: "chat_id" },
       data: {
         receive_id: chatId,
         msg_type: "audio",
-        content: JSON.stringify({ file_key: fileKey }),
+        content: JSON.stringify(content),
       },
     });
 
@@ -688,8 +696,8 @@ export async function sendMedia(
         const fileKey = await uploadFile(account, opusPath, "opus", `${Date.now()}.opus`, duration);
         if (!fileKey) return { ok: false, error: "Failed to upload audio" };
 
-        // 语音消息不附带文字说明（音频本身就是内容）
-        return await sendAudioMessage(account, chatId, fileKey);
+        // 语音消息不附带文字说明（音频本身就是内容），传入 duration 显示时长
+        return await sendAudioMessage(account, chatId, fileKey, duration);
       } finally {
         if (opusPath) await unlink(opusPath).catch(() => {});
       }

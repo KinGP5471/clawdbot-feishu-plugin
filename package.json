@@ -6,7 +6,9 @@
   "main": "index.ts",
   "scripts": {},
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.46.0"
@@ -15,6 +17,12 @@
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
-    "clawdbot": "*"
+    "clawdbot": "*",
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

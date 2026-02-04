@@ -587,7 +587,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     sendText: async (ctx: any) => {
       // 从 cfg + accountId 解析 account（outbound 标准流程不传 account 对象）
       const accountId = ctx.accountId || "default";
+      console.log(`[feishu:outbound] sendText called → ctx.accountId=${ctx.accountId}, resolved=${accountId}, to=${ctx.to}, text=${ctx.text?.substring(0,50)}...`);
+      if (!ctx.accountId) {
+        console.warn(`[feishu:outbound] sendText accountId missing, falling back to "${accountId}" (to=${ctx.to})`);
+      }
       const account = resolveFeishuAccount(ctx.cfg, accountId);
+      console.log(`[feishu:outbound] resolvedAccount → accountId=${account?.accountId}, appId=${account?.appId?.slice(0,8)}...`);
       if (!account) {
         return { ok: false, error: new Error(`Feishu account "${accountId}" not found`) };
       }
@@ -600,6 +605,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
     sendMedia: async (ctx: any) => {
       const accountId = ctx.accountId || "default";
+      console.log(`[feishu:outbound] sendMedia called → ctx.accountId=${ctx.accountId}, resolved=${accountId}, to=${ctx.to}`);
+      if (!ctx.accountId) {
+        console.warn(`[feishu:outbound] sendMedia accountId missing, falling back to "${accountId}" (to=${ctx.to})`);
+      }
       const account = resolveFeishuAccount(ctx.cfg, accountId);
       if (!account) {
         return { ok: false, error: new Error(`Feishu account "${accountId}" not found`) };
@@ -617,6 +626,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
     sendInteractive: async (ctx: any) => {
       const accountId = ctx.accountId || "default";
+      if (!ctx.accountId) {
+        console.warn(`[feishu:outbound] sendInteractive accountId missing, falling back to "${accountId}" (to=${ctx.to})`);
+      }
       const account = resolveFeishuAccount(ctx.cfg, accountId);
       if (!account) {
         return { ok: false, error: new Error(`Feishu account "${accountId}" not found`) };
@@ -744,14 +756,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           };
 
           // 私聊 block 缓冲：攒 block 合成一条消息，避免拆成多条
+          // 但每隔 MAX_BUFFER_MS 强制 flush，避免长回复让用户等太久
           let blockTextBuffer: string[] = [];
           let blockMediaBuffer: string[] = [];
           let blockReplyToId: string | undefined;
           let flushTimer: ReturnType<typeof setTimeout> | null = null;
-          const FLUSH_DELAY_MS = 3000; // 3秒无新 block 则自动刷新
+          let bufferStartTime: number | null = null;
+          const FLUSH_DELAY_MS = 2000; // 2秒无新 block 则自动刷新
+          const MAX_BUFFER_MS = 8000; // 最长缓冲8秒，超过强制发送
 
           const flushBlockBuffer = async () => {
             if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+            bufferStartTime = null;
             const text = blockTextBuffer.join("\n").trim();
             const media = [...blockMediaBuffer];
             const replyId = blockReplyToId;
@@ -771,12 +787,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
             ];
 
             if (meta?.kind === "block") {
+              // 记录缓冲开始时间
+              if (!bufferStartTime) bufferStartTime = Date.now();
               // 累积 block 内容
               if (text) blockTextBuffer.push(text);
               blockMediaBuffer.push(...mediaUrls);
               // 保存第一个 block 的 replyToId
               if (!blockReplyToId && payload.replyToId) {
                 blockReplyToId = payload.replyToId;
+              }
+              // 如果缓冲超过 MAX_BUFFER_MS，立即 flush
+              if (Date.now() - bufferStartTime >= MAX_BUFFER_MS) {
+                await flushBlockBuffer();
+                return;
               }
               // 重置刷新计时器
               if (flushTimer) clearTimeout(flushTimer);
@@ -795,16 +818,23 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
             ? createGroupDeliver(account, message.chatId, cfg, { depth: 0, visitedEdges: new Set() })
             : bufferedDeliver;
 
+          // 语音消息回复时禁用 block streaming，让整个回复走 final 模式
+          // 这样 TTS suppressText 能正常生效（只发音频不发文字）
+          const isVoiceMessage = (message as any).originalMessageType === "audio";
+
           await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: msgCtx,
             cfg,
             dispatcherOptions: { deliver },
+            replyOptions: {
+              disableBlockStreaming: isVoiceMessage || undefined,
+            },
           });
 
           // 确保退出前刷新所有缓冲内容
           await flushBlockBuffer();
 
-          // 回复完成后，移除自动确认回执的 👀 reaction
+          // 回复完成后，移除 🫡 Salute reaction（自动确认回执）
           try {
             const { getPendingAcknowledgement, removePendingAcknowledgement } = await import("./gateway.js");
             const ack = getPendingAcknowledgement(message.messageId);
@@ -814,7 +844,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
             }
           } catch (ackErr) {
             // 不影响主流程
-            console.error(`[feishu:${account.accountId}] Remove ack reaction failed: ${ackErr}`);
+            console.error(`[feishu:${account.accountId}] Remove reaction failed: ${ackErr}`);
           }
         },
         logger: {
