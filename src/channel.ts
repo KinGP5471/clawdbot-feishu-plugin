@@ -631,7 +631,29 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         return { ok: false, error: new Error(`Feishu account "${accountId}" not found`) };
       }
       // 支持引用回复（框架通过 replyToId 传递目标消息 ID）
-      const result = await sendTextWithReply(account, ctx.to, ctx.text, ctx.replyToId);
+      const text = ctx.text || "";
+      const hasMd = /```|\*\*|^#{1,6}\s|\[.+\]\(.+\)|^\s*[-*+]\s|^\s*\d+\.\s|~~|`[^`]+`/m.test(text);
+      if (hasMd || hasMarkdownTable(text)) {
+        if (hasMarkdownTable(text)) {
+          const tableResult = markdownTableToCard(text);
+          if (tableResult) {
+            if (tableResult.beforeTable) {
+              const r = await sendMarkdownCard(account, ctx.to, tableResult.beforeTable);
+              if (!r.ok) await sendTextMessage(account, ctx.to, tableResult.beforeTable);
+            }
+            await sendInteractiveMessage(account, ctx.to, tableResult.card);
+            if (tableResult.afterTable) {
+              const r = await sendMarkdownCard(account, ctx.to, tableResult.afterTable);
+              if (!r.ok) await sendTextMessage(account, ctx.to, tableResult.afterTable);
+            }
+            return { ok: true };
+          }
+        }
+        const mdResult = await sendMarkdownCard(account, ctx.to, text);
+        if (mdResult.ok) return { ok: true };
+        // 降级到纯文本
+      }
+      const result = await sendTextWithReply(account, ctx.to, text, ctx.replyToId);
       return {
         ok: result.ok,
         error: result.error ? new Error(result.error) : undefined,
