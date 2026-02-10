@@ -8,7 +8,7 @@ import type {
   ChannelOnboardingAdapter,
 } from "clawdbot/plugin-sdk";
 import type { ResolvedFeishuAccount, FeishuChannelConfig } from "./types.js";
-import { sendTextMessage, sendMedia, sendPostMessage, sendInteractiveMessage, markdownToFeishuPost, addReaction, removeReaction, deleteMessage, updateMessage, replyMessage, getApiDomain } from "./client.js";
+import { sendTextMessage, sendMedia, sendPostMessage, sendInteractiveMessage, sendMarkdownCard, markdownToFeishuPost, hasMarkdownTable, markdownTableToCard, addReaction, removeReaction, deleteMessage, updateMessage, replyMessage, getApiDomain } from "./client.js";
 import { startGateway, startWebhookGateway } from "./gateway.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { MsgContext } from "./msg-context.js";
@@ -370,14 +370,37 @@ function createGroupDeliver(
         }
       }
     } else if (sendText) {
-      const hasCodeBlock = sendText.includes('```');
-      if (hasCodeBlock) {
-        const postContent = markdownToFeishuPost(sendText);
-        const result = await sendPostWithReply(senderAccount, chatId, postContent, replyToId);
-        if (!result.ok) {
-          await sendTextWithReply(senderAccount, chatId, sendText, replyToId);
+      const hasMarkdown = /```|\*\*|^#{1,6}\s|\[.+\]\(.+\)|^\s*[-*+]\s|^\s*\d+\.\s|~~|`[^`]+`/m.test(sendText);
+      if (hasMarkdown || hasMarkdownTable(sendText)) {
+        if (hasMarkdownTable(sendText)) {
+          const tableResult = markdownTableToCard(sendText);
+          if (tableResult) {
+            if (tableResult.beforeTable) {
+              const r = await sendMarkdownCard(senderAccount, chatId, tableResult.beforeTable);
+              if (!r.ok) await sendTextWithReply(senderAccount, chatId, tableResult.beforeTable, replyToId);
+              replied = true;
+            }
+            await sendInteractiveMessage(senderAccount, chatId, tableResult.card);
+            replied = true;
+            if (tableResult.afterTable) {
+              const r = await sendMarkdownCard(senderAccount, chatId, tableResult.afterTable);
+              if (!r.ok) await sendTextMessage(senderAccount, chatId, tableResult.afterTable);
+            }
+          } else {
+            await sendTextWithReply(senderAccount, chatId, sendText, replyToId);
+            replied = true;
+          }
+        } else {
+          const result = await sendMarkdownCard(senderAccount, chatId, sendText);
+          if (!result.ok) {
+            const postContent = markdownToFeishuPost(sendText);
+            const postResult = await sendPostWithReply(senderAccount, chatId, postContent, replyToId);
+            if (!postResult.ok) {
+              await sendTextWithReply(senderAccount, chatId, sendText, replyToId);
+            }
+          }
+          replied = true;
         }
-        replied = true;
       } else {
         await sendTextWithReply(senderAccount, chatId, sendText, replyToId);
         replied = true;
@@ -762,14 +785,41 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
                 }
               }
             } else if (text) {
-              const hasCodeBlock = text.includes('```');
-              if (hasCodeBlock) {
-                const postContent = markdownToFeishuPost(text);
-                const result = await sendPostWithReply(account, message.chatId, postContent, effectiveReplyTo);
-                if (!result.ok) {
-                  await sendTextWithReply(account, message.chatId, text, effectiveReplyTo);
+              // 检测是否包含 markdown 语法
+              const hasMarkdown = /```|\*\*|^#{1,6}\s|\[.+\]\(.+\)|^\s*[-*+]\s|^\s*\d+\.\s|~~|`[^`]+`/m.test(text);
+              if (hasMarkdown || hasMarkdownTable(text)) {
+                // 有表格时：表格用 table 卡片，其他用 markdown 卡片
+                if (hasMarkdownTable(text)) {
+                  const tableResult = markdownTableToCard(text);
+                  if (tableResult) {
+                    if (tableResult.beforeTable) {
+                      const r = await sendMarkdownCard(account, message.chatId, tableResult.beforeTable);
+                      if (!r.ok) await sendTextWithReply(account, message.chatId, tableResult.beforeTable, effectiveReplyTo);
+                      dmReplied = true;
+                    }
+                    await sendInteractiveMessage(account, message.chatId, tableResult.card);
+                    dmReplied = true;
+                    if (tableResult.afterTable) {
+                      const r = await sendMarkdownCard(account, message.chatId, tableResult.afterTable);
+                      if (!r.ok) await sendTextMessage(account, message.chatId, tableResult.afterTable);
+                    }
+                  } else {
+                    await sendTextWithReply(account, message.chatId, text, effectiveReplyTo);
+                    dmReplied = true;
+                  }
+                } else {
+                  // 无表格，纯 markdown → 用 markdown 卡片
+                  const result = await sendMarkdownCard(account, message.chatId, text);
+                  if (!result.ok) {
+                    // 降级：用 post 格式
+                    const postContent = markdownToFeishuPost(text);
+                    const postResult = await sendPostWithReply(account, message.chatId, postContent, effectiveReplyTo);
+                    if (!postResult.ok) {
+                      await sendTextWithReply(account, message.chatId, text, effectiveReplyTo);
+                    }
+                  }
+                  dmReplied = true;
                 }
-                dmReplied = true;
               } else {
                 await sendTextWithReply(account, message.chatId, text, effectiveReplyTo);
                 dmReplied = true;

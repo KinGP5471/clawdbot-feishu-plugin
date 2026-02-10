@@ -164,9 +164,147 @@ export async function sendPostMessage(
 }
 
 /**
+ * 检测文本是否包含 markdown 表格
+ */
+export function hasMarkdownTable(text: string): boolean {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^\s*\|(.+\|)+\s*$/.test(lines[i]) && /^\s*\|[\s:]*-+[\s:]*/.test(lines[i + 1])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 解析 markdown 表格为飞书卡片 table 组件 JSON
+ * 返回 { card, beforeTable, afterTable } 或 null
+ */
+export function markdownTableToCard(text: string): { card: Record<string, any>; beforeTable: string; afterTable: string } | null {
+  const lines = text.split('\n');
+  let tableStart = -1;
+  let tableEnd = -1;
+
+  // 找到表格的开始（header 行）和分隔行
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^\s*\|(.+\|)+\s*$/.test(lines[i]) && /^\s*\|[\s:]*-+[\s:]*/.test(lines[i + 1])) {
+      tableStart = i;
+      break;
+    }
+  }
+
+  if (tableStart === -1) return null;
+
+  // 找到表格结束
+  tableEnd = tableStart + 2; // 至少 header + separator + 1 row
+  while (tableEnd < lines.length && /^\s*\|(.+\|)+\s*$/.test(lines[tableEnd])) {
+    tableEnd++;
+  }
+
+  // 解析 header
+  const headerLine = lines[tableStart];
+  const headers = headerLine.split('|').filter(c => c.trim()).map(c => c.trim());
+
+  // 解析数据行
+  const dataRows: string[][] = [];
+  for (let i = tableStart + 2; i < tableEnd; i++) {
+    const cells = lines[i].split('|').filter(c => c.trim() !== '' || lines[i].trim().startsWith('|')).map(c => c.trim());
+    // 去掉首尾空元素（因为 | 开头和结尾会产生空字符串）
+    const cleanCells = lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+    dataRows.push(cleanCells);
+  }
+
+  // 构建飞书卡片 table
+  const columns = headers.map((h, idx) => ({
+    name: `col_${idx}`,
+    display_name: h,
+    data_type: "text",
+    width: "auto",
+  }));
+
+  const rows = dataRows.map(row => {
+    const obj: Record<string, string> = {};
+    headers.forEach((_, idx) => {
+      obj[`col_${idx}`] = row[idx] || "";
+    });
+    return obj;
+  });
+
+  const card = {
+    schema: "2.0",
+    body: {
+      elements: [
+        {
+          tag: "table",
+          page_size: Math.max(rows.length, 1),
+          row_height: "low",
+          header_style: {
+            bold: true,
+            text_align: "left",
+            background_style: "grey",
+          },
+          columns,
+          rows,
+        },
+      ],
+    },
+  };
+
+  const beforeTable = lines.slice(0, tableStart).join('\n').trim();
+  const afterTable = lines.slice(tableEnd).join('\n').trim();
+
+  return { card, beforeTable, afterTable };
+}
+
+/**
  * 将 markdown 转换为飞书富文本格式
  * 主要处理代码块
  */
+/**
+ * 解析一行文本中的 inline markdown 语法，转为飞书 post 元素数组
+ * 支持：**bold**, *italic*, `code`, [text](url), ~~strikethrough~~
+ */
+function parseInlineMarkdown(text: string): any[] {
+  const elements: any[] = [];
+  // 匹配顺序：链接 > 行内代码 > 加粗 > 删除线 > 斜体
+  const regex = /\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*(.+?)\*\*|~~(.+?)~~|\*(.+?)\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    // 前面的普通文本
+    if (match.index > lastIndex) {
+      elements.push({ tag: "text", text: text.slice(lastIndex, match.index) });
+    }
+
+    if (match[1] !== undefined && match[2] !== undefined) {
+      // [text](url) → a 标签
+      elements.push({ tag: "a", text: match[1], href: match[2] });
+    } else if (match[3] !== undefined) {
+      // `code` → 行内代码（飞书用 text + style）
+      elements.push({ tag: "text", text: match[3], style: ["code"] });
+    } else if (match[4] !== undefined) {
+      // **bold**
+      elements.push({ tag: "text", text: match[4], style: ["bold"] });
+    } else if (match[5] !== undefined) {
+      // ~~strikethrough~~
+      elements.push({ tag: "text", text: match[5], style: ["lineThrough"] });
+    } else if (match[6] !== undefined) {
+      // *italic*
+      elements.push({ tag: "text", text: match[6], style: ["italic"] });
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 剩余文本
+  if (lastIndex < text.length) {
+    elements.push({ tag: "text", text: text.slice(lastIndex) });
+  }
+
+  return elements.length > 0 ? elements : [{ tag: "text", text }];
+}
+
 export function markdownToFeishuPost(markdown: string): any[][] {
   const lines = markdown.split('\n');
   const content: any[][] = [];
@@ -174,17 +312,6 @@ export function markdownToFeishuPost(markdown: string): any[][] {
   let inCodeBlock = false;
   let codeLanguage = '';
   let codeLines: string[] = [];
-  let textLines: string[] = [];
-  
-  const flushText = () => {
-    if (textLines.length > 0) {
-      const text = textLines.join('\n').trim();
-      if (text) {
-        content.push([{ tag: "text", text }]);
-      }
-      textLines = [];
-    }
-  };
   
   const flushCode = () => {
     if (codeLines.length > 0) {
@@ -202,24 +329,58 @@ export function markdownToFeishuPost(markdown: string): any[][] {
   for (const line of lines) {
     if (line.startsWith('```')) {
       if (inCodeBlock) {
-        // 结束代码块
         flushCode();
         inCodeBlock = false;
       } else {
-        // 开始代码块
-        flushText();
         codeLanguage = line.slice(3).trim() || 'plain_text';
         inCodeBlock = true;
       }
     } else if (inCodeBlock) {
       codeLines.push(line);
     } else {
-      textLines.push(line);
+      // 处理标题：## heading → 去掉 # 号，加粗显示
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        content.push([{ tag: "text", text: headingMatch[2], style: ["bold"] }]);
+        continue;
+      }
+
+      // 处理分割线
+      if (/^[-*_]{3,}\s*$/.test(line)) {
+        content.push([{ tag: "text", text: "────────────" }]);
+        continue;
+      }
+
+      // 处理无序列表：- item 或 * item
+      const ulMatch = line.match(/^(\s*)[-*+]\s+(.+)$/);
+      if (ulMatch) {
+        const indent = ulMatch[1].length >= 2 ? "    " : "";
+        const bullet = indent + "• ";
+        content.push([{ tag: "text", text: bullet }, ...parseInlineMarkdown(ulMatch[2])]);
+        continue;
+      }
+
+      // 处理有序列表：1. item
+      const olMatch = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
+      if (olMatch) {
+        const indent = olMatch[1].length >= 2 ? "    " : "";
+        const prefix = indent + olMatch[2] + ". ";
+        content.push([{ tag: "text", text: prefix }, ...parseInlineMarkdown(olMatch[3])]);
+        continue;
+      }
+
+      // 空行
+      if (line.trim() === '') {
+        content.push([{ tag: "text", text: "" }]);
+        continue;
+      }
+
+      // 普通行：解析 inline markdown
+      content.push(parseInlineMarkdown(line));
     }
   }
   
-  // 处理未结束的内容
-  flushText();
+  // 处理未结束的代码块
   if (inCodeBlock) {
     flushCode();
   }
@@ -634,6 +795,28 @@ export async function sendInteractiveMessage(
   } catch (error) {
     return { ok: false, error: String(error) };
   }
+}
+
+/**
+ * 发送 markdown 卡片消息（利用飞书卡片的 markdown 组件原生渲染）
+ */
+export async function sendMarkdownCard(
+  account: ResolvedFeishuAccount,
+  chatId: string,
+  markdownText: string,
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  const card = {
+    schema: "2.0",
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: markdownText,
+        },
+      ],
+    },
+  };
+  return sendInteractiveMessage(account, chatId, card);
 }
 
 /**
